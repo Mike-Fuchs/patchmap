@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "patchmap"
+dynamic = ["version"]
+description = "Analyze and generate spatial infection patch maps for precision crop protection research."
+authors = [
+    { name = "Mike Devin Fuchs" }
+]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "geopandas",
+    "shapely",
+    "rasterio",
+    "scipy",
+    "scikit-image",
+    "exactextract",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.urls]
+Repository = "https://github.com/Mike-Fuchs/patchmap"
+
+[tool.setuptools.packages.find]
+include = ["patchmap*"]
+
+[tool.setuptools_scm]
