@@ -6,13 +6,13 @@ import rasterio.crs
 import rasterio.io
 from shapely.geometry.base import BaseGeometry
 from patchmap.utils import (
-    build_global_raster, build_zones, make_patches, report_sr_adjustments
+    build_global_raster, build_zones, make_patches, meters_to_pixels, report_sr_adjustments
 )
 
 
 def generate(field_geom, ir, mmr, sr_micro, sr_macro,
              edge_bias=1.5, edge_width=10.0, smoothing_flag=2,
-             rng_seed=None, resolution=1.0, crs=None, mode="patch"):
+             rng_seed=None, resolution=1.0, crs=None, mode="patch", verbose=True):
     """
     Generate a synthetic infection patch raster for a field.
 
@@ -32,6 +32,7 @@ def generate(field_geom, ir, mmr, sr_micro, sr_macro,
         resolution (float): Output raster resolution in meters.
         crs: Coordinate reference system — any value accepted by rasterio (e.g. 'EPSG:32632').
         mode (str): Application mode. Currently only "patch" is supported.
+        verbose (bool): Print a note when the smoothing radii are rounded to odd pixels.
 
     Returns:
         rasterio.io.MemoryFile: In-memory raster dataset with:
@@ -42,7 +43,8 @@ def generate(field_geom, ir, mmr, sr_micro, sr_macro,
     Raises:
         TypeError: If field_geom is not a shapely geometry.
         ValueError: If field_geom is empty, or crs is geographic (degrees) —
-            generate requires a projected geometry in meters.
+            generate requires a projected geometry in meters; or if the
+            effective sr_micro exceeds the effective sr_macro (in pixels).
     """
     if mode != "patch":
         raise NotImplementedError(f"Mode '{mode}' is not yet implemented.")
@@ -62,7 +64,19 @@ def generate(field_geom, ir, mmr, sr_micro, sr_macro,
             "because resolution, edge_width and sr_* are in meters. Reproject to UTM first."
         )
 
-    report_sr_adjustments(sr_micro, sr_macro, resolution)
+    if verbose:
+        report_sr_adjustments(sr_micro, sr_macro, resolution)
+
+    # sr_micro > sr_macro would make "micro" the larger patches and reverse the
+    # meaning of mmr; equal values (uniform patch size) are allowed.
+    sr_micro_px = meters_to_pixels(sr_micro, resolution)
+    sr_macro_px = meters_to_pixels(sr_macro, resolution)
+    if sr_micro_px > sr_macro_px:
+        raise ValueError(
+            f"sr_micro ({sr_micro}m -> {sr_micro_px}px) exceeds sr_macro "
+            f"({sr_macro}m -> {sr_macro_px}px) after rounding to odd pixels; "
+            "sr_micro must not exceed sr_macro."
+        )
 
     transform, width, height, crs = build_global_raster(field_geom, crs, resolution)
     zones = build_zones(field_geom, transform, width, height, edge_width, resolution)

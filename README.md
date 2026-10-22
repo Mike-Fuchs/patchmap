@@ -110,7 +110,8 @@ They may be in different CRS — reconciled internally.
 ```python
 generate(field_geom, ir, mmr, sr_micro, sr_macro,
          edge_bias=1.5, edge_width=10.0, smoothing_flag=2,
-         rng_seed=None, resolution=1.0, crs=None, mode="patch") -> rasterio.io.MemoryFile
+         rng_seed=None, resolution=1.0, crs=None, mode="patch",
+         verbose=True) -> rasterio.io.MemoryFile
 ```
 
 Synthesize a binary infection patch raster for a field.
@@ -131,10 +132,13 @@ Synthesize a binary infection patch raster for a field.
 | `resolution` | float | m | `1.0` | Output raster cell size. |
 | `crs` | any | — | `None` | Output CRS, e.g. `"EPSG:32632"`. Must be projected. |
 | `mode` | str | — | `"patch"` | Application mode. Only `"patch"` is supported; `"strip"` is planned. |
+| `verbose` | bool | — | `True` | Print a note when `sr_*` are rounded to odd pixels. `False` = silent. |
 
 `field_geom` must be a non-empty `Polygon`/`MultiPolygon` in a projected CRS (meters):
 `resolution`, `edge_width` and `sr_*` are metric, so a geographic `crs` raises
 `ValueError`, and an unsupported `mode` raises `NotImplementedError`.
+`sr_micro` must not exceed `sr_macro` (compared after rounding to odd pixels),
+else `ValueError`; equal values are allowed (uniform patch size).
 
 **Returns** — `rasterio.io.MemoryFile`, a single-band `Int16` raster:
 

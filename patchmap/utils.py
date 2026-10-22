@@ -285,20 +285,31 @@ def make_patches(zones, ir, mmr, sr_micro, sr_macro, edge_bias,
     sr_micro_px = meters_to_pixels(sr_micro, resolution)
     sr_macro_px = meters_to_pixels(sr_macro, resolution)
 
-    rng = np.random.default_rng(rng_seed)
+    # Independent random streams per component: one seed gives the same random
+    # fields for every parameter set, since the number of draws in one component
+    # (e.g. num_seeds) never shifts the draws of another.
+    rng_macro, rng_bg, rng_micro = (
+        np.random.default_rng(s) for s in np.random.SeedSequence(rng_seed).spawn(3)
+    )
 
     if smoothing_flag == 1:
-        macro_field = masked_smooth(rng.normal(0, 1, size=(H, W)), allowed_mask, sr_macro_px)
+        macro_field = masked_smooth(rng_macro.normal(0, 1, size=(H, W)), allowed_mask, sr_macro_px)
     else:
         seeds = np.zeros((H, W), dtype=float)
         num_seeds = max(1, int(int(n_total * (1 - mmr) / (sr_macro_px ** 2)) * k1))
-        seed_indices = rng.choice(H * W, size=num_seeds, replace=False)
+        # Cannot seed more cells than exist; at the cap every cell is a seed, the
+        # macro field is flat and allocation is driven by background noise alone.
+        num_seeds = min(num_seeds, H * W)
+        # Rank all cells once by a random priority and take the top num_seeds, so
+        # seed positions are nested across seed counts (more seeds = same + extra).
+        priority = rng_macro.random(H * W)
+        seed_indices = np.argpartition(priority, -num_seeds)[-num_seeds:]
         seeds.ravel()[seed_indices] = 1.0
         macro_field = gaussian_filter(seeds, sigma=sr_macro_px / k2, mode="reflect")
-        macro_field += rng.uniform(0, k3, size=(H, W))
+        macro_field += rng_bg.uniform(0, k3, size=(H, W))
         macro_field = gaussian_filter(macro_field, sigma=sr_macro_px / k4, mode="reflect")
 
-    micro_field = masked_smooth(rng.normal(0, 1, size=(H, W)), allowed_mask, sr_micro_px)
+    micro_field = masked_smooth(rng_micro.normal(0, 1, size=(H, W)), allowed_mask, sr_micro_px)
 
     if flag == "edge_full":
         sel_edge = edge_mask.copy()

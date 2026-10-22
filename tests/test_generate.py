@@ -88,6 +88,82 @@ class TestReproducibility:
             assert not np.array_equal(ds1.read(1), ds2.read(1))
 
 
+class TestSeedConsistency:
+    """One seed gives the same random fields for every parameter set.
+
+    The parameter sets differ in ir, mmr and sr_macro, which all change the
+    number of macro seeds; with a single shared random stream that shifted
+    every later draw.
+    """
+
+    SET_A = {**DEFAULTS, "mmr": 0.5, "sr_macro": 10.0}
+    SET_B = {**DEFAULTS, "mmr": 0.3, "sr_macro": 5.0}
+
+    @staticmethod
+    def _record(monkeypatch, name):
+        import patchmap.utils as utils
+        calls = []
+        original = getattr(utils, name)
+
+        def spy(arr, *args, **kwargs):
+            calls.append(np.array(arr, copy=True))
+            return original(arr, *args, **kwargs)
+
+        monkeypatch.setattr(utils, name, spy)
+        return calls
+
+    def test_micro_noise_identical(self, field_geom, crs, monkeypatch):
+        # with Gaussian seed smoothing, masked_smooth is only called for micro noise
+        calls = self._record(monkeypatch, "masked_smooth")
+        generate(field_geom, ir=0.10, crs=crs, **self.SET_A)
+        generate(field_geom, ir=0.30, crs=crs, **self.SET_B)
+        assert len(calls) == 2
+        assert np.array_equal(calls[0], calls[1])
+
+    def test_macro_seeds_nested(self, field_geom, crs, monkeypatch):
+        # the first gaussian_filter call per generate receives the seed raster
+        calls = self._record(monkeypatch, "gaussian_filter")
+        generate(field_geom, ir=0.10, crs=crs, **self.SET_A)
+        seeds_a = calls[0] > 0
+        generate(field_geom, ir=0.30, crs=crs, **self.SET_B)
+        seeds_b = calls[2] > 0
+        assert 1 < seeds_a.sum() < seeds_b.sum()
+        assert np.all(seeds_b[seeds_a])
+
+
+class TestSmoothingRadii:
+    def test_sr_macro_one_pixel(self, field_geom, crs):
+        # 1 px macro radius asks for more seeds than cells; capped, not an error
+        params = {**DEFAULTS, "mmr": 0.0, "sr_micro": 1.0, "sr_macro": 1.0}
+        result = generate(field_geom, ir=0.5, crs=crs, **params)
+        with result.open() as ds:
+            arr = ds.read(1)
+        actual_ir = (arr == 1).sum() / (arr >= 0).sum()
+        assert abs(actual_ir - 0.5) < 0.02
+
+    def test_sr_micro_above_macro_raises(self, field_geom, crs):
+        params = {**DEFAULTS, "sr_micro": 7.0, "sr_macro": 5.0}
+        with pytest.raises(ValueError):
+            generate(field_geom, ir=0.15, crs=crs, **params)
+
+    def test_sr_micro_equal_macro_allowed(self, field_geom, crs):
+        # 4 m and 5 m both round to 5 px: equal after rounding, allowed
+        params = {**DEFAULTS, "sr_micro": 4.0, "sr_macro": 5.0}
+        generate(field_geom, ir=0.15, crs=crs, **params)
+
+
+class TestVerbose:
+    PARAMS = {**DEFAULTS, "sr_micro": 4.0}  # 4 m is rounded to 5 px
+
+    def test_default_prints_rounding(self, field_geom, crs, capsys):
+        generate(field_geom, ir=0.15, crs=crs, **self.PARAMS)
+        assert "sr_micro" in capsys.readouterr().out
+
+    def test_verbose_false_silent(self, field_geom, crs, capsys):
+        generate(field_geom, ir=0.15, crs=crs, verbose=False, **self.PARAMS)
+        assert capsys.readouterr().out == ""
+
+
 class TestSmoothingModes:
     def test_focal_smoothing(self, field_geom, crs):
         params = {**DEFAULTS, "smoothing_flag": 1}
