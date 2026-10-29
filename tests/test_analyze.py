@@ -47,10 +47,10 @@ class TestAnalyzeValues:
         assert abs(metrics["mmr"] - 0.5426) < 0.01
 
     def test_sr_micro(self, metrics):
-        assert abs(metrics["sr_micro"] - 1.6254) < 0.05
+        assert abs(metrics["sr_micro"] - 2.0851) < 0.05
 
     def test_sr_macro(self, metrics):
-        assert abs(metrics["sr_macro"] - 6.3686) < 0.1
+        assert abs(metrics["sr_macro"] - 9.1359) < 0.1
 
     def test_edge_bias(self, metrics):
         assert abs(metrics["edge_bias"] - 1.9862) < 0.05

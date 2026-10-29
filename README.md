@@ -47,7 +47,7 @@ field = gpd.read_file("field_boundary.geojson")
 weeds = gpd.read_file("weed_observations.geojson")
 
 metrics = analyze(field, weeds)
-# -> {'ir': 0.07, 'mmr': 0.54, 'sr_micro': 1.63, 'sr_macro': 6.35, 'edge_bias': 1.99}
+# -> {'ir': 0.07, 'mmr': 0.54, 'sr_micro': 2.09, 'sr_macro': 9.14, 'edge_bias': 1.98}
 ```
 
 **Generate a patch raster** — synthesize weed distribution:
@@ -57,8 +57,8 @@ import rasterio
 from patchmap import generate
 
 # field_geom: a non-empty shapely polygon in a projected CRS (meters)
-result = generate(field_geom, ir=0.07, mmr=0.54, sr_micro=1.63, sr_macro=6.35,
-                  edge_bias=1.99, crs="EPSG:32632")
+result = generate(field_geom, ir=0.07, mmr=0.54, sr_micro=2.09, sr_macro=9.14,
+                  edge_bias=1.98, crs="EPSG:32632")
 
 with result.open() as ds:
     patch_array = ds.read(1)   # 1 = infected, 0 = healthy, -99 = outside field
@@ -99,8 +99,8 @@ They may be in different CRS — reconciled internally.
 |-----|------|-------------|
 | `ir` | — | Infection rate (0–1) — fraction of field area covered by infection. |
 | `mmr` | — | Micro-to-macro ratio (0–1) — fraction of infected area in micro patches. |
-| `sr_micro` | m | Mean equivalent diameter of micro patches, `2·√(area/π)` (> 0). |
-| `sr_macro` | m | Mean equivalent diameter of macro patches (> 0). |
+| `sr_micro` | m | Area-weighted mean equivalent diameter of micro patches, `2·√(area/π)` (> 0). |
+| `sr_macro` | m | Area-weighted mean equivalent diameter of macro patches (> 0). |
 | `edge_bias` | — | Infection rate in the edge zone ÷ core zone (> 1 = more near edges). |
 
 ---

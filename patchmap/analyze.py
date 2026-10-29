@@ -33,8 +33,8 @@ def analyze(field_gdf, weed_gdf, edge_width=10.0):
         dict: Metrics ready for use as inputs to generate():
             - ir (float): Infection rate — fraction of field area infected.
             - mmr (float): Micro-to-macro ratio.
-            - sr_micro (float): Mean equivalent diameter of micro patches in meters.
-            - sr_macro (float): Mean equivalent diameter of macro patches in meters.
+            - sr_micro (float): Area-weighted mean equivalent diameter of micro patches in meters.
+            - sr_macro (float): Area-weighted mean equivalent diameter of macro patches in meters.
             - edge_bias (float): Ratio of infection rate in edge zone vs. core zone.
 
     Raises:
@@ -195,8 +195,11 @@ def _compute_patch_metrics(infection, resolution, percentile_cutoff):
     total_area = areas_m2.sum()
     mmr = float(areas_m2[micro].sum() / total_area) if total_area > 0 else np.nan
 
+    # Area-weighted: a plain per-patch mean is dominated by the many 1-2 cell
+    # fragments at patch fringes, which carry little area. Weighting by area
+    # gives the size of the patch a typical infected cell belongs to.
     diameters_m = 2 * np.sqrt(areas_m2 / np.pi)
-    sr_micro = float(np.mean(diameters_m[micro])) if micro.any() else np.nan
-    sr_macro = float(np.mean(diameters_m[macro])) if macro.any() else np.nan
+    sr_micro = float(np.average(diameters_m[micro], weights=areas_m2[micro])) if micro.any() else np.nan
+    sr_macro = float(np.average(diameters_m[macro], weights=areas_m2[macro])) if macro.any() else np.nan
 
     return mmr, sr_micro, sr_macro

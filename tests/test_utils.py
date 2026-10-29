@@ -101,6 +101,16 @@ class TestDetectGrid:
         assert abs(ox - 400000.0) < 1.0
         assert abs(oy - 5400000.0) < 1.0
 
+    def test_case2_dense_utm_grid(self):
+        # Dense metric grid: reprojected to WGS84 its longitudes nearly fill the
+        # axis, so the rounding quantum must not be taken for a case-1 grid.
+        gdf = _make_grid_gdf(500000.0, 5700000.0, cell_size=1.0, n=100)
+        ox, oy, res, case, _ = detect_grid(gdf)
+        assert case == 2
+        assert abs(res - 1.0) < 0.01
+        assert abs(ox - 500000.0) < 1.0
+        assert abs(oy - 5700000.0) < 1.0
+
     def test_case3_irregular(self):
         # explicitly non-square cells: 0.3m wide x 0.9m tall — squareness fails in both CRS
         polys = [box(400000.0 + i * 0.5, 5400000.0, 400000.0 + i * 0.5 + 0.3, 5400000.9)
@@ -111,6 +121,17 @@ class TestDetectGrid:
         assert res == 1.0
         assert ox is not None
         assert oy is not None
+
+    def test_case3_off_grid_vertices(self):
+        # Square cells at random positions: square, but on no common lattice.
+        rng = np.random.default_rng(0)
+        xs = 400000.0 + rng.uniform(0, 200, 300)
+        ys = 5400000.0 + rng.uniform(0, 200, 300)
+        polys = [box(x, y, x + 0.5, y + 0.5) for x, y in zip(xs, ys)]
+        gdf = gpd.GeoDataFrame(geometry=polys, crs="EPSG:32632")
+        _, _, res, case, _ = detect_grid(gdf)
+        assert case == 3
+        assert res == 1.0
 
     def test_case3_resolution_is_1m(self):
         polys = [box(400000.0 + i * 0.5, 5400000.0, 400000.0 + i * 0.5 + 0.3, 5400000.9)

@@ -18,13 +18,21 @@ _K2 = 3.0   # macro blob core scaling (higher = tighter blobs)
 _K3 = 0.2   # background noise level between macro patches
 _K4 = 3.0   # final macro smoothing strength
 
+# Smallest cell accepted as a genuine grid. Below this a "grid" is coordinate
+# rounding or float noise, not an observation raster.
+_MIN_CELL_M = 0.05
+_M_PER_DEG = 111_320.0
+
 
 # --- Grid detection ---
 
 def detect_grid(gdf, n_sample=500, squareness_tol=0.05):
     """
-    Detect whether weed observation polygons lie on a regular square grid,
-    first checking in WGS84 (case 1), then in UTM (case 2).
+    Detect whether weed observation polygons lie on a regular square grid.
+
+    A grid only exists in the CRS it was created in, so the input's native CRS
+    is tested first (geographic -> case 1, projected -> case 2) and the other
+    one only as fallback.
 
     Args:
         gdf (GeoDataFrame): Weed observation polygons.
@@ -33,41 +41,47 @@ def detect_grid(gdf, n_sample=500, squareness_tol=0.05):
 
     Returns:
         tuple: (origin_x, origin_y, resolution, case, target_crs)
-            - target_crs: the single UTM CRS to use for all downstream analysis,
-              estimated once here so every rasterize step shares it
+            - target_crs: the single metric CRS to use for all downstream
+              analysis, chosen once here so every rasterize step shares it:
+              the input CRS for case 2 if it is projected in meters, else the
+              estimated UTM CRS
             - origin and resolution are in the *grid* CRS units: degrees for
               case 1 (rasterized in WGS84, then reprojected to target_crs),
               target_crs meters for cases 2 and 3
-            - case: 1 (square in WGS84), 2 (square in UTM), 3 (neither)
+            - case: 1 (square in WGS84), 2 (square in a metric CRS), 3 (neither)
             - case 3: resolution defaults to 1.0m, origin from weed data bounds
     """
-    target_crs = gdf.estimate_utm_crs()
+    utm_crs = gdf.estimate_utm_crs()
     sample = gdf.sample(min(n_sample, len(gdf)), random_state=42)
 
-    # case 1: check in WGS84
-    gdf_wgs = sample.to_crs("EPSG:4326") if sample.crs.to_epsg() != 4326 else sample
-    result = _check_square_grid(gdf_wgs, squareness_tol)
-    if result is not None:
-        ox, oy, res = result
-        return ox, oy, res, 1, target_crs
+    native_geo = sample.crs.is_geographic
+    native_metric = not native_geo and sample.crs.axis_info[0].unit_name == "metre"
+    metric_crs = sample.crs if native_metric else utm_crs
 
-    # case 2: check in UTM
-    gdf_utm = sample.to_crs(target_crs)
-    result = _check_square_grid(gdf_utm, squareness_tol)
-    if result is not None:
-        ox, oy, res = result
-        return ox, oy, res, 2, target_crs
+    for case in ((1, 2) if native_geo else (2, 1)):
+        if case == 1:
+            # case 1: check in WGS84
+            gdf_wgs = sample.to_crs("EPSG:4326") if sample.crs.to_epsg() != 4326 else sample
+            result = _check_square_grid(gdf_wgs, squareness_tol, _MIN_CELL_M / _M_PER_DEG)
+            target_crs = utm_crs
+        else:
+            # case 2: check in the metric CRS
+            result = _check_square_grid(sample.to_crs(metric_crs), squareness_tol, _MIN_CELL_M)
+            target_crs = metric_crs
+        if result is not None:
+            ox, oy, res = result
+            return ox, oy, res, case, target_crs
 
     # case 3: default to 1m in UTM, origin from weed data bounds
-    gdf_utm = gdf.to_crs(target_crs)
+    gdf_utm = gdf.to_crs(utm_crs)
     bounds = gdf_utm.total_bounds  # xmin, ymin, xmax, ymax
-    return float(bounds[0]), float(bounds[1]), 1.0, 3, target_crs
+    return float(bounds[0]), float(bounds[1]), 1.0, 3, utm_crs
 
 
-def _check_square_grid(gdf, squareness_tol):
+def _check_square_grid(gdf, squareness_tol, min_cell):
     """
-    Extract vertex coordinates, find the dominant grid spacing,
-    and check squareness. Returns (origin_x, origin_y, resolution) or None.
+    Extract vertex coordinates, fit a lattice per axis and check squareness.
+    Returns (origin_x, origin_y, resolution) or None.
     """
     xs, ys = [], []
     for geom in gdf.geometry:
@@ -80,24 +94,18 @@ def _check_square_grid(gdf, squareness_tol):
     xs = np.array(sorted(set(xs)))
     ys = np.array(sorted(set(ys)))
 
-    res_x = _dominant_spacing(xs)
-    res_y = _dominant_spacing(ys)
+    fit_x = _fit_lattice(xs, min_cell)
+    fit_y = _fit_lattice(ys, min_cell)
 
-    if res_x is None or res_y is None:
+    if fit_x is None or fit_y is None:
         return None
+
+    (res_x, phase_x), (res_y, phase_y) = fit_x, fit_y
 
     if abs(res_x - res_y) / max(res_x, res_y) > squareness_tol:
         return None
 
     resolution = (res_x + res_y) / 2
-
-    # Compute a robust grid phase from all vertices: for each coordinate,
-    # measure its residual from the nearest ideal grid point relative to an
-    # arbitrary reference, then average across all points to get a stable phase.
-    ref_x = xs[len(xs) // 2]
-    ref_y = ys[len(ys) // 2]
-    phase_x = ref_x + np.mean(xs - (ref_x + np.round((xs - ref_x) / res_x) * res_x))
-    phase_y = ref_y + np.mean(ys - (ref_y + np.round((ys - ref_y) / res_y) * res_y))
 
     # Snap the minimum coordinate to the nearest valid grid point.
     origin_x = phase_x + np.round((xs.min() - phase_x) / res_x) * res_x
@@ -106,27 +114,43 @@ def _check_square_grid(gdf, squareness_tol):
     return float(origin_x), float(origin_y), float(resolution)
 
 
-def _dominant_spacing(coords, noise_floor=1e-8, min_recurrence=0.2):
+def _fit_lattice(coords, min_cell, on_grid_tol=0.25, min_on_grid=0.9):
     """
-    Find the cell spacing as the minimum non-trivial diff between
-    sorted unique coordinates. Floating point noise is filtered by noise_floor.
+    Cell size and phase of the 1-D lattice the coordinates lie on, or None.
 
-    A genuine grid's smallest spacing recurs across the data; a spacing that
-    appears essentially once is not a grid but an artifact — e.g. the rounding
-    quantum exposed when projected (case 2) data is reprojected to WGS84 for the
-    case-1 check. Such a one-off minimum is rejected so detection falls through
-    to the next CRS. `min_recurrence` is the minimum fraction of gaps that must
-    sit within 5% of the candidate spacing.
+    Candidate cell size: the median of the gaps close to the smallest gap
+    between sorted unique coordinates that is at least min_cell (smaller gaps
+    are rounding or float noise, e.g. the rounding quantum exposed when
+    projected data is reprojected to WGS84). The smallest gap alone can be a
+    little short in rounded source data, and that error accumulates over many
+    cells, so cell size and phase are then refined by a linear fit of the
+    coordinates against their cell index.
+
+    Accepted only if at least `min_on_grid` of the coordinates sit within
+    `on_grid_tol` cells of phase + k * cell, i.e. the data lies on a grid by
+    definition rather than by a gap statistic. A vertex within 0.25 cells is
+    closer to its grid line than to the midpoint between two lines, so it
+    snaps unambiguously; off-grid coordinates are spread evenly and only ~50%
+    fall within that tolerance. Real grids drift from rounding in the source
+    data (the case-1 fixture by up to ~0.16 cells), hence no tighter value.
     """
     diffs = np.diff(coords)
-    diffs = diffs[diffs > noise_floor]
+    diffs = diffs[diffs >= min_cell]
     if len(diffs) == 0:
         return None
-    candidate = diffs.min()
-    recurrence = np.mean(np.abs(diffs - candidate) <= 0.05 * candidate)
-    if recurrence < min_recurrence:
+    smallest = diffs.min()
+    cell = float(np.median(diffs[diffs <= 1.5 * smallest]))
+
+    ref = coords[len(coords) // 2]
+    k = np.round((coords - ref) / cell)
+    if np.ptp(k) > 0:
+        cell, phase = np.polyfit(k, coords, 1)
+    else:
+        phase = ref
+    resid = (coords - (phase + k * cell)) / cell  # offset from the lattice, in cells
+    if np.mean(np.abs(resid) <= on_grid_tol) < min_on_grid:
         return None
-    return float(candidate)
+    return float(cell), float(phase)
 
 
 # --- SR conversion ---
